@@ -8,7 +8,7 @@ from AppKit import NSEvent
 from notch_window import NotchWindow, _in_notch_zone
 
 MAX_TITLE_LEN       = 45
-AUTO_COLLAPSE_SECS  = 2.0   # new-song → auto-collapse after this
+AUTO_COLLAPSE_SECS  = 3.0   # new-song → auto-collapse after this
 HOVER_COLLAPSE_SECS = 1.0   # mouse leaves widget → collapse after this
 HOVER_EXPAND_DELAY  = 0.5   # dwell time hovering before full expand (anti-accidental)
 HOVER_POLL          = 0.1

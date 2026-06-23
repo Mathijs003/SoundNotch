@@ -71,7 +71,7 @@ in lockstep, with an ease-in-out curve.
 position, and volume — no account or network calls required. (Its limits are what shape the
 "possible expansions" below.)
 
-**Startup** is handled by a **LaunchAgent** (`com.mathijscop.soundnotch`) with
+**Startup** is handled by a **LaunchAgent** (`com.soundnotch.app`) with
 `RunAtLoad` + `KeepAlive`, and `LSUIElement` so there's no Dock icon. Logs go to
 `/tmp/soundnotch.out` and `/tmp/soundnotch.err`.
 

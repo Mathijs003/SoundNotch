@@ -3,7 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
-PLIST_LABEL="com.mathijscop.soundnotch"
+PLIST_LABEL="com.soundnotch.app"
 PLIST_DEST="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 
 echo "==> Setting up virtual environment..."

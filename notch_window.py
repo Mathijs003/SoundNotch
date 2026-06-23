@@ -6,6 +6,7 @@ from AppKit import (
     NSWindowStyleMaskBorderless, NSWindowStyleMaskNonactivatingPanel,
     NSBackingStoreBuffered,
     NSColor, NSFont, NSMakeRect, NSScreen, NSEvent, NSBezierPath,
+    NSShadow, NSGraphicsContext,
     NSWindowCollectionBehaviorCanJoinAllSpaces,
     NSWindowCollectionBehaviorStationary,
     NSWindowCollectionBehaviorIgnoresCycle,
@@ -21,10 +22,11 @@ from Quartz import CGDisplayIsBuiltin
 NOTCH_W  = 220.0
 NOTCH_HW = NOTCH_W / 2.0      # 110
 
-H_MINI   = 38.0              # collapsed height = notch height
-H_FULL   = 112.0            # expanded height (room for the control row)
-FLARE    = 22.0             # top inverted-fillet radius (also side margin)
+H_MINI   = 38.0              # collapsed shape height = notch height
+H_FULL   = 112.0            # expanded shape height (room for the control row)
+FLARE    = 22.0             # top inverted-fillet radius (also side shadow margin)
 CR_BOT   = 22.0             # bottom convex corner radius
+SHADOW_PAD = 28.0           # transparent room below the shape for the drop shadow
 
 # Collapsed panel
 WW_C     = 348.0            # collapsed width  (art | notch | fwd)
@@ -52,11 +54,12 @@ PP_CX     = WW_E / 2.0    # 210 — centred in the widget
 PREV_CX   = PP_CX - _ROW_GAP
 NEXT_CX   = PP_CX + _ROW_GAP
 
-ANIM_DUR  = 0.30           # expand / collapse duration (s)
-ANIM_FADE = 0.18           # show / hide fade duration (s)
-ANIM_PEEK = 0.16           # peek / unpeek duration (s)
-PEEK_T    = 0.20           # interpolation value for the "slight" hover peek
-TICK      = 1.0 / 60.0
+ANIM_EXPAND   = 0.44       # full expand — longer so the overshoot bounce reads
+ANIM_COLLAPSE = 0.30       # collapse back to the mini bar
+ANIM_FADE     = 0.20       # show / hide fade duration (s)
+ANIM_PEEK     = 0.22       # peek / unpeek duration (s) — a touch longer for its bounce
+PEEK_T        = 0.20       # interpolation value for the "slight" hover peek
+TICK          = 1.0 / 60.0
 
 NOTCH_ZONE_HALF_W = 160
 NOTCH_ZONE_H      = 50
@@ -73,12 +76,26 @@ def _lerp(a, b, t):
     return a + (b - a) * t
 
 
-def _ease(p):
-    """easeInOutCubic"""
+def _ease_in_out(p):
+    """easeInOutCubic — smooth acceleration and deceleration."""
     if p < 0.5:
         return 4.0 * p * p * p
     f = -2.0 * p + 2.0
     return 1.0 - (f * f * f) / 2.0
+
+
+def _ease_out(p):
+    """easeOutCubic — quick start, gentle settle (snappy)."""
+    f = 1.0 - p
+    return 1.0 - f * f * f
+
+
+def _ease_out_back(p):
+    """easeOutBack — shoots a little past the target, then settles. The bounce."""
+    s  = 1.5            # overshoot strength (~8–9% past target)
+    c3 = s + 1.0
+    f  = p - 1.0
+    return 1.0 + c3 * f * f * f + s * f * f
 
 
 def _clamp01(v):
@@ -161,31 +178,41 @@ class _NotchBG(NSView):
         return False
 
     def drawRect_(self, rect):
-        b  = self.bounds()
-        w  = b.size.width
-        h  = b.size.height
-        L  = FLARE
-        R  = w - FLARE
-        ft = FLARE
-        rb = min(CR_BOT, max(0.0, h - ft))
+        b   = self.bounds()
+        w   = b.size.width
+        h   = b.size.height
+        bot = SHADOW_PAD             # shape sits this far above the window bottom
+        L   = FLARE
+        R   = w - FLARE
+        ft  = FLARE
+        rb  = min(CR_BOT, max(0.0, (h - bot) - ft))
 
         p = NSBezierPath.bezierPath()
         p.moveToPoint_((0.0, h))
         p.lineToPoint_((w, h))
         p.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
             (w, h - ft), ft, 90, 180, False)
-        p.lineToPoint_((R, rb))
+        p.lineToPoint_((R, bot + rb))
         p.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
-            (R - rb, rb), rb, 0, -90, True)
-        p.lineToPoint_((L + rb, 0.0))
+            (R - rb, bot + rb), rb, 0, -90, True)
+        p.lineToPoint_((L + rb, bot))
         p.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
-            (L + rb, rb), rb, 270, 180, True)
+            (L + rb, bot + rb), rb, 270, 180, True)
         p.lineToPoint_((L, h - ft))
         p.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
             (0.0, h - ft), ft, 0, 90, False)
         p.closePath()
+
+        # Soft drop shadow rendered into the transparent padding around the shape.
+        NSGraphicsContext.saveGraphicsState()
+        shadow = NSShadow.alloc().init()
+        shadow.setShadowColor_(NSColor.colorWithWhite_alpha_(0.0, 0.55))
+        shadow.setShadowBlurRadius_(16.0)
+        shadow.setShadowOffset_((0.0, -6.0))   # down (non-flipped: negative y)
+        shadow.set()
         NSColor.blackColor().set()
         p.fill()
+        NSGraphicsContext.restoreGraphicsState()
 
 
 # ── NotchWindow ────────────────────────────────────────────────────────────────
@@ -206,7 +233,8 @@ class NotchWindow:
         self._anim    = {}      # name -> (from, target, start, dur)
         self._timer   = None
 
-        w, h = WW_C, H_MINI
+        w = WW_C
+        h = H_MINI + SHADOW_PAD
         sf = _builtin_screen().frame()
         x = sf.origin.x + (sf.size.width - w) / 2
         y = sf.origin.y + sf.size.height - h
@@ -222,13 +250,16 @@ class NotchWindow:
         self._win.setOpaque_(False)
         self._win.setBackgroundColor_(NSColor.clearColor())
         self._win.setLevel_(NSScreenSaverWindowLevel)
-        self._win.setIgnoresMouseEvents_(False)
+        # Click-through by default; only captures clicks while the cursor is over
+        # the solid panel (set each hover tick), so the shadow/margins never block
+        # the windows beneath.
+        self._win.setIgnoresMouseEvents_(True)
         self._win.setCollectionBehavior_(
             NSWindowCollectionBehaviorCanJoinAllSpaces
             | NSWindowCollectionBehaviorStationary
             | NSWindowCollectionBehaviorIgnoresCycle
         )
-        self._win.setHasShadow_(False)
+        self._win.setHasShadow_(False)   # we draw our own soft shadow (NSShadow)
         self._win.setAlphaValue_(0.0)
 
         cv = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
@@ -288,7 +319,9 @@ class NotchWindow:
     def _apply_layout(self):
         t = self._t
         w = _lerp(WW_C, WW_E, t)
-        h = _lerp(H_MINI, H_FULL, t)
+        # h is the full window height (shape + bottom shadow padding). All content
+        # is anchored from the top, so the extra bottom padding doesn't move it.
+        h = _lerp(H_MINI, H_FULL, t) + SHADOW_PAD
 
         sf = _builtin_screen().frame()
         x = sf.origin.x + (sf.size.width - w) / 2
@@ -333,9 +366,9 @@ class NotchWindow:
 
     # ── Tiny scalar animator (single shared timer) ─────────────────────────────
 
-    def _animate(self, name, target, dur):
+    def _animate(self, name, target, dur, ease=_ease_in_out):
         cur = self._t if name == 't' else self._alpha
-        self._anim[name] = (cur, target, time.time(), dur)
+        self._anim[name] = (cur, target, time.time(), dur, ease)
         if self._timer is None:
             self._timer = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
                 TICK, True, lambda tm: self._tick())
@@ -343,9 +376,9 @@ class NotchWindow:
     def _tick(self):
         now  = time.time()
         done = []
-        for name, (frm, tgt, start, dur) in list(self._anim.items()):
+        for name, (frm, tgt, start, dur, ease) in list(self._anim.items()):
             p = 1.0 if dur <= 0 else min(1.0, (now - start) / dur)
-            val = _lerp(frm, tgt, _ease(p))
+            val = _lerp(frm, tgt, ease(p))
             if name == 't':
                 self._t = val
             else:
@@ -377,7 +410,7 @@ class NotchWindow:
                 self._alpha = 0.0
                 self._apply_layout()
                 self._win.orderFrontRegardless()
-                self._animate('alpha', 1.0, ANIM_FADE)
+                self._animate('alpha', 1.0, ANIM_FADE, _ease_out)
         run_on_main(_main)
         if artwork_url:
             threading.Thread(target=self._fetch_art, args=(artwork_url,), daemon=True).start()
@@ -386,14 +419,14 @@ class NotchWindow:
         """Slight expand hint while hovering (stays in the COLLAPSED state)."""
         def _main():
             if self._state == COLLAPSED:
-                self._animate('t', PEEK_T, ANIM_PEEK)
+                self._animate('t', PEEK_T, ANIM_PEEK, _ease_out_back)   # little bounce
         run_on_main(_main)
 
     def unpeek(self):
         """Return from a peek to the mini bar."""
         def _main():
             if self._state == COLLAPSED:
-                self._animate('t', 0.0, ANIM_PEEK)
+                self._animate('t', 0.0, ANIM_PEEK, _ease_out)
         run_on_main(_main)
 
     def expand(self):
@@ -401,7 +434,7 @@ class NotchWindow:
             if self._state == HIDDEN:
                 return
             self._state = EXPANDED
-            self._animate('t', 1.0, ANIM_DUR)
+            self._animate('t', 1.0, ANIM_EXPAND, _ease_out_back)   # overshoot bounce
         run_on_main(_main)
 
     def collapse(self):
@@ -409,7 +442,7 @@ class NotchWindow:
             if self._state == HIDDEN:
                 return
             self._state = COLLAPSED
-            self._animate('t', 0.0, ANIM_DUR)
+            self._animate('t', 0.0, ANIM_COLLAPSE, _ease_in_out)
         run_on_main(_main)
 
     def hide(self):
@@ -417,7 +450,7 @@ class NotchWindow:
             if self._state == HIDDEN:
                 return
             self._state = HIDDEN
-            self._animate('alpha', 0.0, ANIM_FADE)
+            self._animate('alpha', 0.0, ANIM_FADE, _ease_in_out)
         run_on_main(_main)
 
     def update_play_state(self, playing):
@@ -432,11 +465,29 @@ class NotchWindow:
         return self._state == EXPANDED
 
     def contains_point(self, loc):
+        # Exclude the bottom SHADOW_PAD (transparent shadow room) so hovering the
+        # shadow area doesn't count as hovering the widget.
         fr = self._win.frame()
         return (
             fr.origin.x <= loc.x < fr.origin.x + fr.size.width
-            and fr.origin.y <= loc.y < fr.origin.y + fr.size.height
+            and fr.origin.y + SHADOW_PAD <= loc.y < fr.origin.y + fr.size.height
         )
+
+    def _over_panel(self, loc):
+        # True only over the *solid* panel — excludes the bottom shadow padding
+        # and the side flare margins (both transparent / shadow-only).
+        if self._state == HIDDEN:
+            return False
+        fr = self._win.frame()
+        return (
+            fr.origin.x + FLARE <= loc.x <= fr.origin.x + fr.size.width - FLARE
+            and fr.origin.y + SHADOW_PAD <= loc.y <= fr.origin.y + fr.size.height
+        )
+
+    def update_click_through(self, loc):
+        # Capture clicks only while over the solid panel; pass through everywhere
+        # else (shadow, margins) so windows beneath stay clickable.
+        self._win.setIgnoresMouseEvents_(not self._over_panel(loc))
 
     # ── Artwork ────────────────────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@ MAX_TITLE_LEN       = 45
 AUTO_COLLAPSE_SECS  = 3.0   # new-song → auto-collapse after this
 HOVER_COLLAPSE_SECS = 1.0   # mouse leaves widget → collapse after this
 HOVER_EXPAND_DELAY  = 0.5   # dwell time hovering before full expand (anti-accidental)
-HOVER_POLL          = 0.1
+HOVER_POLL          = 0.05  # also drives click-through toggling, so keep it snappy
 
 CONFIG_DIR  = os.path.expanduser("~/Library/Application Support/SoundNotch")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
@@ -210,9 +210,10 @@ class SoundNotch(rumps.App):
         """Runs every HOVER_POLL seconds. Handles hover-to-expand and the
         deadline-based auto-collapse (rumps.Timer can't do a one-shot delay —
         it fires immediately and repeats — so we track a target timestamp here)."""
+        loc = NSEvent.mouseLocation()
+        self._notch.update_click_through(loc)   # capture clicks only over the panel
         if not self._notch.is_shown():
             return
-        loc = NSEvent.mouseLocation()
         now = _time.time()
 
         hovering = self._notch.contains_point(loc) or _in_notch_zone(loc)
